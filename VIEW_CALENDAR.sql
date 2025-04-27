@@ -82,6 +82,10 @@ select
 ,   concat(calendar_year, '-', quarter_number) as year_quarter
 ,   initcap(concat(day_name, ', ', month_name, ' ', day_of_month_number, ', ', calendar_year)) as calendar_date_description
 ,   case
+        when day_of_week_number between 2 and 6 then TRUE
+        else FALSE
+    end as is_weekday
+,   case
         when day_of_week_number not between 2 and 6 then TRUE
         else FALSE
     end as is_weekend
@@ -90,17 +94,18 @@ select
         and not c.calendar_date is NULL
         and c.calendar_date between '1900-01-01' and '2099-12-31'
 )
-,   leap_cte as (
+,   lpdy_cte (calendar_date) as (
+-- Leap days
 select
-    c.calendar_year
+    c.calendar_date
     from calendar_cte as c
         where TRUE
-group by c.calendar_year
-having count(distinct c.calendar_date) > 365
+        and c.month_number = 2 -- February
+        and c.day_of_month_number = 29 -- 29th day
 )
 ,   nwyr_cte (holiday_date, holiday) as (
+-- New Years Day: First day of the calendar year
 select distinct
--- First day of the calendar year
     case 
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 7 then c.calendar_date_yesterday
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 1 then c.calendar_date_tomorrow
@@ -118,8 +123,8 @@ select distinct
         and c.day_of_month_number = 1
 )
 ,   mlkj_cte (holiday_date, holiday) as (
+-- Martin Luther King Jr Day: Third Monday in Janaury since 1986
 select
--- Third Monday in Janaury since 1986
     c.calendar_date as holiday_date
 ,   'Martin Luther King Jr Day' as holiday_name
     from calendar_cte as c
@@ -132,7 +137,7 @@ qualify (
     rank() over (partition by c.calendar_year, case when c.day_of_week_number = 2 then 1 else 0 end order by c.calendar_date asc)) = 3
 )
 ,   wbdy_cte (holiday_date, holiday) as (
--- Third Monday in February since 1879
+-- Washingtons Birthday (aka Presidents Day): Third Monday in February since 1879
 select
     c.calendar_date as holiday_date
 ,   'Washington''s Birthday' as holiday_name
@@ -146,7 +151,7 @@ qualify (
     rank() over (partition by c.calendar_year, case when c.day_of_week_number = 2 then 1 else 0 end order by c.calendar_date asc)) = 3
 )
 ,   mmrl_cte (holiday_date, holiday) as (
--- Last Monday in May since 1868
+-- Memorial Day: Last Monday in May since 1868
 select 
     max(c.calendar_date) as holiday_date
 ,   'Memorial Day' as holiday_name
@@ -159,8 +164,8 @@ group by
     c.calendar_year
 )
 ,   jnth_cte (holiday_date, holiday) as (
+-- Juneteenth: Nineteenth of June since 2021
 select distinct
--- Nineteenth of June since 2021
     case 
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 7 then c.calendar_date_yesterday
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 1 then c.calendar_date_tomorrow
@@ -179,8 +184,8 @@ select distinct
         and c.day_of_month_number = 19
 )
 ,   jul4_cte (holiday_date, holiday) as (
+-- Independence Day: 4th day of July since 1777
 select distinct
--- 4th day of July since 1777
     case 
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 7 then c.calendar_date_yesterday
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 1 then c.calendar_date_tomorrow
@@ -199,7 +204,7 @@ select distinct
         and c.day_of_month_number = 4
 )
 ,   labr_cte (holiday_date, holiday) as (
--- First Monday in September since 1894
+-- Labor Day: First Monday in September since 1894
 select
     min(c.calendar_date) as holiday_date
 ,   'Labor Day' as holiday_name
@@ -212,6 +217,7 @@ group by
     c.calendar_year
 )
 ,   ccdy_cte (holiday_date, holiday) as (
+-- Colombus Day: 2nd Monday in October
 select
     s.holiday_date
 ,   'Columbus Day' as holiday_name
@@ -239,8 +245,8 @@ select
     ) as s
 )
 ,   vets_cte (holiday_date, holiday) as (
+-- Veterans Day: 11th of November
 select distinct
--- 11th day in November
     case 
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 7 then c.calendar_date_yesterday
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 1 then c.calendar_date_tomorrow
@@ -258,6 +264,7 @@ select distinct
         and c.day_of_month_number = 11
 )
 ,   thnx_cte (holiday_date, holiday) as (
+-- Thanksgiving Day: 4th Thursday in November
 select 
     s.holiday_date
 ,   'Thanksgiving Day' as holiday_name
@@ -286,8 +293,8 @@ select
     ) as s
 )
 ,   xmas_cte (holiday_date, holiday) as (
+-- Christmas Day
 select distinct
--- 25th day in December
     case 
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 7 then c.calendar_date_yesterday
         when c.calendar_date >= '1966-09-06' and c.day_of_week_number = 1 then c.calendar_date_tomorrow
@@ -304,7 +311,7 @@ select distinct
         and c.day_of_month_number = 25
 )
 select
-    cal.* exclude (is_weekend)
+    cal.* exclude (is_weekday, is_weekend)
 ,   case
         when nyd.holiday is not NULL then nyd.holiday
         when mlk.holiday is not NULL then mlk.holiday
@@ -319,17 +326,28 @@ select
         when xms.holiday is not NULL then xms.holiday
         else NULL -- Not a recognized federal holiday
     end as holiday_name
+,   cal.is_weekday
 ,   cal.is_weekend
 ,   case 
         when holiday_name is not NULL then TRUE 
         else FALSE 
     end as is_holiday
 ,   case
-        when lep.calendar_year is not NULL then TRUE
+        when is_holiday then FALSE
+        when is_weekend then FALSE
+        else TRUE
+    end is_work_day
+,   case 
+        when (cal.calendar_year % 4 = 0 and cal.calendar_year % 100 != 0) then TRUE
+        when (cal.calendar_year % 4 = 0 and cal.calendar_year % 100 = 0 and cal.calendar_year % 400 = 0) then TRUE
         else FALSE
     end as is_leap_year
+,   case 
+        when lpd.calendar_date is not NULL then TRUE
+        else FALSE
+    end as is_leap_day
     from calendar_cte as cal
-    left join leap_cte as lep on cal.calendar_year = lep.calendar_year
+    left join lpdy_cte as lpd on cal.calendar_date = lpd.calendar_date
     left join nwyr_cte as nyd on cal.calendar_date = nyd.holiday_date
     left join mlkj_cte as mlk on cal.calendar_date = mlk.holiday_date
     left join wbdy_cte as was on cal.calendar_date = was.holiday_date
@@ -342,7 +360,6 @@ select
     left join thnx_cte as thx on cal.calendar_date = thx.holiday_date
     left join xmas_cte as xms on cal.calendar_date = xms.holiday_date
         where TRUE
-        AND cal.calendar_year between 2020 and 2026
 order by 
     case
         when calendar_year = year(current_date()) then 0 else 1
